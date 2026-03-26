@@ -12,7 +12,7 @@ Every morning at 08:15 UTC, a GitHub Actions workflow triggers and executes the 
 2.  **Merge** – Each of the 53 NRW districts is mapped to its corresponding DWD warning cell ID (CCC) via its AGS code. This assignment is based on the official DWD `cap_warncellids.csv` (column `CCC`, filtered for `BL = NW` and WARNCELLID prefix `105`).
 3.  **Map Generation** – A Sentinel-2 satellite image (GeoTIFF, georeferenced) serves as the background. The 53 district areas are overlaid with 70% opacity, colored according to the day's warning level (`Trend[0]`). NRW is vertically centered, occupying approximately 620 of the 640-pixel height.
 4.  **Legend** – Displays the current warning levels along with the daily count of affected districts. The right edge of the legend is flush with the eastern border of NRW.
-5.  **Commit** – The final map is automatically committed to the repository as `Hitzekarte_NRW_heute.jpg` (1280 × 640 px).
+5.  **Commit** – The final map is automatically committed to the repository as `heat-warning-map-nrw-today.jpg` (1280 × 640 px).
 
 ## Warning Levels
 
