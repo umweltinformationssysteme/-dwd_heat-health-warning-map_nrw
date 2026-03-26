@@ -2,6 +2,8 @@
 
 Daily automated visualization of DWD (German Weather Service) heat warnings for all 53 districts and independent cities in North Rhine-Westphalia.
 
+![Hitzekarte NRW](heat-warning-map-nrw-today.jpg)
+
 ## How It Works
 
 Every morning at 08:15 UTC, a GitHub Actions workflow triggers and executes the following steps:
