@@ -1,7 +1,3 @@
-Here is the English translation of your README file, keeping the structure and technical details intact.
-
------
-
 # NRW Heat Warning Map
 
 Daily automated visualization of DWD (German Weather Service) heat warnings for all 53 districts and independent cities in North Rhine-Westphalia.
