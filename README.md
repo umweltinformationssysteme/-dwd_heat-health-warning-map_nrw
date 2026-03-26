@@ -2,7 +2,7 @@
 
 Daily automated visualization of DWD (German Weather Service) heat warnings for all 53 districts and independent cities in North Rhine-Westphalia.
 
-![NRW Daily Heat Map](heat-warning-map-nrw-today.jpg)
+![NRW Daily Heat Map](heat-warning-map-nrw-today.jpg?raw=true)
 
 ## How It Works
 
