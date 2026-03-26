@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-NRW Hitzewarnungs-Karte – tägliche Generierung
-Fetcht DWD-Daten, überlagert Kreise auf Sentinel-2-Satellitenbild, speichert als JPG.
+NRW Heat Warning Map – Daily Generation
+Fetches DWD data, overlays districts on a Sentinel-2 satellite image, and saves as JPG.
 
-DWD-Datenformat (Beschreibung_hwtrend_json.pdf, 21.03.2025):
-  JSON-Dict mit DWD-Kürzel als Key:
-    {"DOX": {"Name": "Stadt Dortmund", "Bundesland": "12", "Trend": [0,0,0,0,0,0,0,0]}, ...}
-  Trend[0] = heutiger Warnstatus.
-  Warnstufen: 0=keine, 1=stark, 2=extrem, 3-7=Trendwerte.
+DWD Data Format (Beschreibung_hwtrend_json.pdf, 21.03.2025):
+  JSON dict with DWD abbreviation as key:
+    {"DOX": {"Name": "City of Dortmund", "State": "12", "Trend": [0,0,0,0,0,0,0,0]}, ...}
+  Trend[0] = today's warning status.
+  Warning levels: 0=none, 1=strong, 2=extreme, 3-7=trend values.
 
-Kürzel-Mapping: Quelle cap_warncellids.csv (DWD), Spalte CCC, gefiltert auf BL=NW
-und WARNCELLID-Präfix 105xxxxx (= Kreisebene). AGS = WARNCELLID[1:6].
+Abbreviation Mapping: Source cap_warncellids.csv (DWD), column CCC, filtered for State=NW
+and WARNCELLID prefix 105xxxxx (= district level). AGS = WARNCELLID[1:6].
 """
 
 import io
@@ -28,93 +28,93 @@ import matplotlib.patches as mpatches
 from matplotlib.colors import to_rgba
 from PIL import Image
 
-# ── Konfiguration ──────────────────────────────────────────────────────────────
-OUTPUT_FILE  = "Hitzekarte_NRW_heute.jpg"
+# ── Configuration ──────────────────────────────────────────────────────────────
+OUTPUT_FILE  = "heat-warning-map-nrw-today.jpg"
 IMG_W_PX     = 1280
 IMG_H_PX     = 640
-NRW_H_FRAC   = 620 / 640       # NRW-Umring ~620 px hoch
+NRW_H_FRAC   = 620 / 640       # NRW outline is ~620 px high
 DWD_BASE_URL = "https://opendata.dwd.de/climate_environment/health/forecasts/heat/"
 GEOJSON_FILE = "landkreise.geojson"
 TIFF_FILE    = "background.tiff"
 
-# Farben (RGB + alpha=0.70)
+# Colors (RGB + alpha=0.70)
 COLORS = {
     0: (*to_rgba("#ffffff")[:3], 0.70),
     1: (*to_rgba("#cc99ff")[:3], 0.70),
     2: (*to_rgba("#9e46f8")[:3], 0.70),
 }
-# Trend-Stufen 3-7 → Warnstufe (3 = nicht mehr verwendet → 0)
+# Trend levels 3-7 → Warning level (3 = no longer used → 0)
 TREND_TO_WARN = {0: 0, 1: 1, 2: 2, 3: 0, 4: 1, 5: 1, 6: 2, 7: 2}
 
-# ── AGS → DWD-Kürzel Mapping ──────────────────────────────────────────────────
-# Quelle: DWD cap_warncellids.csv, Spalte CCC, nur Kreisebene (WARNCELLID 105xxxxx)
-# AGS = WARNCELLID-Stellen 2-6 (z.B. WARNCELLID 105111000 → AGS 05111)
+# ── AGS → DWD Abbreviation Mapping ────────────────────────────────────────────
+# Source: DWD cap_warncellids.csv, column CCC, district level only (WARNCELLID 105xxxxx)
+# AGS = WARNCELLID digits 2-6 (e.g., WARNCELLID 105111000 → AGS 05111)
 AGS_TO_DWD = {
-    # Reg.-Bez. Düsseldorf
-    "05111": "DXX",  # Stadt Düsseldorf
-    "05112": "DUX",  # Stadt Duisburg
-    "05113": "EXX",  # Stadt Essen
-    "05114": "KRX",  # Stadt Krefeld
-    "05116": "MGX",  # Stadt Mönchengladbach
-    "05117": "MHX",  # Stadt Mülheim an der Ruhr
-    "05119": "OBX",  # Stadt Oberhausen
-    "05120": "RSX",  # Stadt Remscheid
-    "05122": "SGX",  # Stadt Solingen
-    "05124": "WXX",  # Stadt Wuppertal
-    "05154": "KLE",  # Kreis Kleve
-    "05158": "MEX",  # Kreis Mettmann
-    "05162": "NEX",  # Rhein-Kreis Neuss
-    "05166": "VIE",  # Kreis Viersen
-    "05170": "WES",  # Kreis Wesel
-    # Reg.-Bez. Köln
-    "05314": "BNX",  # Stadt Bonn
-    "05315": "KXX",  # Stadt Köln
-    "05316": "LEV",  # Stadt Leverkusen
-    "05334": "ACX",  # StädteRegion Aachen
-    "05358": "DNX",  # Kreis Düren
-    "05362": "BMX",  # Rhein-Erft-Kreis
-    "05366": "EUS",  # Kreis Euskirchen
-    "05370": "HSX",  # Kreis Heinsberg
-    "05374": "GMX",  # Oberbergischer Kreis
-    "05378": "GLX",  # Rheinisch-Bergischer Kreis
-    "05382": "SUX",  # Rhein-Sieg-Kreis
-    # Reg.-Bez. Münster
-    "05512": "BOT",  # Stadt Bottrop
-    "05513": "GEX",  # Stadt Gelsenkirchen
-    "05515": "MSX",  # Stadt Münster
-    "05554": "BOR",  # Kreis Borken
-    "05558": "COE",  # Kreis Coesfeld
-    "05562": "REX",  # Kreis Recklinghausen
-    "05566": "STX",  # Kreis Steinfurt
-    "05570": "WAF",  # Kreis Warendorf
-    # Reg.-Bez. Detmold
-    "05711": "BIX",  # Stadt Bielefeld
-    "05754": "GTX",  # Kreis Gütersloh
-    "05758": "HFX",  # Kreis Herford
-    "05762": "HXX",  # Kreis Höxter
-    "05766": "LIP",  # Kreis Lippe
-    "05770": "MIX",  # Kreis Minden-Lübbecke
-    "05774": "PBX",  # Kreis Paderborn
-    # Reg.-Bez. Arnsberg
-    "05911": "BOX",  # Stadt Bochum
-    "05913": "DOX",  # Stadt Dortmund
-    "05914": "HAX",  # Stadt Hagen
-    "05915": "HAM",  # Stadt Hamm
-    "05916": "HER",  # Stadt Herne
-    "05954": "ENX",  # Ennepe-Ruhr-Kreis
-    "05958": "HSK",  # Hochsauerlandkreis
-    "05962": "MKX",  # Märkischer Kreis
-    "05966": "OEX",  # Kreis Olpe
-    "05970": "SIX",  # Kreis Siegen-Wittgenstein
-    "05974": "SOX",  # Kreis Soest
-    "05978": "UNX",  # Kreis Unna
+    # Administrative District: Düsseldorf
+    "05111": "DXX",  # City of Düsseldorf
+    "05112": "DUX",  # City of Duisburg
+    "05113": "EXX",  # City of Essen
+    "05114": "KRX",  # City of Krefeld
+    "05116": "MGX",  # City of Mönchengladbach
+    "05117": "MHX",  # City of Mülheim an der Ruhr
+    "05119": "OBX",  # City of Oberhausen
+    "05120": "RSX",  # City of Remscheid
+    "05122": "SGX",  # City of Solingen
+    "05124": "WXX",  # City of Wuppertal
+    "05154": "KLE",  # District of Kleve
+    "05158": "MEX",  # District of Mettmann
+    "05162": "NEX",  # Rhine-District of Neuss
+    "05166": "VIE",  # District of Viersen
+    "05170": "WES",  # District of Wesel
+    # Administrative District: Cologne
+    "05314": "BNX",  # City of Bonn
+    "05315": "KXX",  # City of Cologne
+    "05316": "LEV",  # City of Leverkusen
+    "05334": "ACX",  # Städteregion Aachen
+    "05358": "DNX",  # District of Düren
+    "05362": "BMX",  # Rhein-Erft-District
+    "05366": "EUS",  # District of Euskirchen
+    "05370": "HSX",  # District of Heinsberg
+    "05374": "GMX",  # Oberbergischer District
+    "05378": "GLX",  # Rheinisch-Bergischer District
+    "05382": "SUX",  # Rhein-Sieg-District
+    # Administrative District: Münster
+    "05512": "BOT",  # City of Bottrop
+    "05513": "GEX",  # City of Gelsenkirchen
+    "05515": "MSX",  # City of Münster
+    "05554": "BOR",  # District of Borken
+    "05558": "COE",  # District of Coesfeld
+    "05562": "REX",  # District of Recklinghausen
+    "05566": "STX",  # District of Steinfurt
+    "05570": "WAF",  # District of Warendorf
+    # Administrative District: Detmold
+    "05711": "BIX",  # City of Bielefeld
+    "05754": "GTX",  # District of Gütersloh
+    "05758": "HFX",  # District of Herford
+    "05762": "HXX",  # District of Höxter
+    "05766": "LIP",  # District of Lippe
+    "05770": "MIX",  # District of Minden-Lübbecke
+    "05774": "PBX",  # District of Paderborn
+    # Administrative District: Arnsberg
+    "05911": "BOX",  # City of Bochum
+    "05913": "DOX",  # City of Dortmund
+    "05914": "HAX",  # City of Hagen
+    "05915": "HAM",  # City of Hamm
+    "05916": "HER",  # City of Herne
+    "05954": "ENX",  # Ennepe-Ruhr-District
+    "05958": "HSK",  # Hochsauerland District
+    "05962": "MKX",  # Märkischer District
+    "05966": "OEX",  # District of Olpe
+    "05970": "SIX",  # District of Siegen-Wittgenstein
+    "05974": "SOX",  # District of Soest
+    "05978": "UNX",  # District of Unna
 }
 
 
 def fetch_dwd_data(date: datetime.date) -> dict:
     """
-    Lädt hwtrend_YYYYMMDD.json vom DWD.
-    Gibt das rohe Dict zurück oder {} bei Fehler.
+    Downloads hwtrend_YYYYMMDD.json from DWD.
+    Returns the raw dict or {} on error.
     """
     filename = f"hwtrend_{date.strftime('%Y%m%d')}.json"
     url = DWD_BASE_URL + filename
@@ -123,32 +123,32 @@ def fetch_dwd_data(date: datetime.date) -> dict:
         r.raise_for_status()
         data = r.json()
         if not isinstance(data, dict):
-            raise ValueError(f"Unerwartetes JSON-Format: {type(data)}, erwartet dict")
-        print(f"DWD-JSON geladen: {len(data)} Warnkreise ({filename})")
-        # Debug: alle im Mapping enthaltenen Kürzel ausgeben
+            raise ValueError(f"Unexpected JSON format: {type(data)}, expected dict")
+        print(f"DWD-JSON loaded: {len(data)} warning areas ({filename})")
+        # Debug: output all abbreviations included in the mapping
         for ags, kuerzel in sorted(AGS_TO_DWD.items()):
             entry = data.get(kuerzel)
             trend0 = entry["Trend"][0] if entry and entry.get("Trend") else "—"
             warn   = TREND_TO_WARN.get(int(trend0), 0) if trend0 != "—" else "—"
-            print(f"  AGS {ags}  {kuerzel:4s}  Trend[0]={trend0}  →Stufe {warn}"
-                  f"  ({entry['Name'] if entry else 'NICHT GEFUNDEN'})")
+            print(f"  AGS {ags}  {kuerzel:4s}  Trend[0]={trend0}  →Level {warn}"
+                  f"  ({entry['Name'] if entry else 'NOT FOUND'})")
         return data
     except Exception as e:
-        print(f"WARNUNG: DWD-Daten nicht ladbar: {e}", file=sys.stderr)
+        print(f"WARNING: Could not load DWD data: {e}", file=sys.stderr)
         return {}
 
 
 def assign_warning_levels(gdf: gpd.GeoDataFrame, dwd_data: dict) -> gpd.GeoDataFrame:
-    """Ordnet jedem Kreis seine Warnstufe für heute (Trend[0]) zu."""
+    """Assigns each district its warning level for today (Trend[0])."""
     def get_level(row):
         ags     = str(row["AGS"])
         kuerzel = AGS_TO_DWD.get(ags)
         if not kuerzel:
-            print(f"  KEIN MAPPING: AGS {ags} ({row.get('GEN')})", file=sys.stderr)
+            print(f"  NO MAPPING: AGS {ags} ({row.get('GEN')})", file=sys.stderr)
             return 0
         entry = dwd_data.get(kuerzel)
         if not entry:
-            print(f"  KÜRZEL FEHLT IM JSON: {kuerzel} ({row.get('GEN')})", file=sys.stderr)
+            print(f"  ABBREVIATION MISSING IN JSON: {kuerzel} ({row.get('GEN')})", file=sys.stderr)
             return 0
         trend = entry.get("Trend", [0])
         return TREND_TO_WARN.get(int(trend[0]) if trend else 0, 0)
@@ -188,7 +188,7 @@ def render_map(gdf: gpd.GeoDataFrame, date: datetime.date):
     fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
     ax.set_axis_off()
 
-    # Satellitenbild
+    # Satellite image
     n   = tiff_data.shape[0]
     rgb = np.stack([tiff_data[i] for i in range(min(3, n))] if n >= 3
                    else [tiff_data[0]] * 3, axis=-1)
@@ -203,7 +203,7 @@ def render_map(gdf: gpd.GeoDataFrame, date: datetime.date):
                       tiff_bounds.bottom, tiff_bounds.top],
               origin="upper", aspect="auto", interpolation="bilinear")
 
-    # Kreisflächen
+    # District areas
     for _, row in gdf_proj.iterrows():
         gpd.GeoDataFrame([row], crs=gdf_proj.crs).plot(
             ax=ax, color=[row["color"]], edgecolor="#444444", linewidth=0.4)
@@ -211,19 +211,18 @@ def render_map(gdf: gpd.GeoDataFrame, date: datetime.date):
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
 
-    # Legende rechts unten
+    # Legend at bottom right
     c = gdf_proj["warn_level"].value_counts().to_dict()
     handles = [
         mpatches.Patch(facecolor=COLORS[0][:3] + (1.0,), edgecolor="#888",
-                       label=f"Keine Warnung  ({c.get(0, 0)} Kreise)"),
+                       label=f"No Warning  ({c.get(0, 0)} Districts)"),
         mpatches.Patch(facecolor=COLORS[1][:3] + (1.0,), edgecolor="#888",
-                       label=f"Starke Wärmebelastung  ({c.get(1, 0)})"),
+                       label=f"High Heat Stress  ({c.get(1, 0)})"),
         mpatches.Patch(facecolor=COLORS[2][:3] + (1.0,), edgecolor="#888",
-                       label=f"Extreme Wärmebelastung  ({c.get(2, 0)})"),
+                       label=f"Extreme Heat Stress  ({c.get(2, 0)})"),
     ]
-    # Legende: rechter Rand exakt bei 948 px vom linken Bildrand.
-    # bbox_to_anchor mit loc="lower right" verankert die rechte untere Ecke der Legende.
-    # Koordinaten als Axes-Fraktion (0..1): 948/1280 horizontal, 12px Abstand unten.
+    # Legend: right edge exactly at 948 px from left edge.
+    # bbox_to_anchor with loc="lower right" anchors the bottom-right corner of the legend.
     LEGEND_RIGHT_PX  = 948
     LEGEND_BOTTOM_PX = 12
     x_anchor = LEGEND_RIGHT_PX  / IMG_W_PX
@@ -237,17 +236,17 @@ def render_map(gdf: gpd.GeoDataFrame, date: datetime.date):
                     framealpha=0.85, edgecolor="#bbbbbb", facecolor="#ffffff",
                     handlelength=1.2, handleheight=1.0,
                     borderpad=0.7, labelspacing=0.4,
-                    title=f"NRW Hitzewarnungen\n{date.strftime('%d.%m.%Y')}",
+                    title=f"NRW Heat Warnings\n{date.strftime('%d.%m.%Y')}",
                     title_fontsize=7.5)
     leg.get_title().set_fontweight("bold")
 
     ax.text(0.01, 0.01,
-            "Datenbasis: Deutscher Wetterdienst · CC BY 4.0  |  Hintergrund: Sentinel-2",
+            "Data source: Deutscher Wetterdienst · CC BY 4.0  |  Background: Sentinel-2",
             transform=ax.transAxes, fontsize=5.5, color="white", alpha=0.9,
             va="bottom", ha="left",
             bbox=dict(facecolor="black", alpha=0.3, pad=2, edgecolor="none"))
 
-    # PNG-Buffer → PIL → JPEG (vermeidet matplotlib JPG-Qualitäts-Bug)
+    # PNG-Buffer → PIL → JPEG (avoids matplotlib JPG quality bug)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", pad_inches=0)
     plt.close(fig)
@@ -255,19 +254,19 @@ def render_map(gdf: gpd.GeoDataFrame, date: datetime.date):
     img = Image.open(buf).convert("RGB")
     img = img.resize((IMG_W_PX, IMG_H_PX), Image.LANCZOS)
     img.save(OUTPUT_FILE, format="JPEG", quality=88, optimize=True)
-    print(f"Karte gespeichert: {OUTPUT_FILE}  ({img.size[0]}x{img.size[1]} px)")
+    print(f"Map saved: {OUTPUT_FILE}  ({img.size[0]}x{img.size[1]} px)")
 
 
 def main():
     today = datetime.date.today()
-    print(f"Generiere Hitzekarte für {today.strftime('%d.%m.%Y')} …")
+    print(f"Generating heat map for {today.strftime('%d.%m.%Y')} …")
     dwd_data = fetch_dwd_data(today)
     gdf      = load_geodata()
     gdf      = assign_warning_levels(gdf, dwd_data)
     warned   = (gdf["warn_level"] > 0).sum()
-    print(f"Kreise mit Warnung: {warned}/53")
+    print(f"Districts with warnings: {warned}/53")
     render_map(gdf, today)
-    print("Fertig.")
+    print("Done.")
 
 
 if __name__ == "__main__":
